@@ -1,4 +1,4 @@
-# Dockerfile for Munir Face Recognition API (Railway Fixed)
+# Dockerfile for Munir Face Recognition API (Railway Compatible)
 FROM python:3.10-bullseye
 
 # Set working directory
@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 # Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies one by one
+# Install Python dependencies one by one (more stable)
 RUN pip install --no-cache-dir fastapi==0.109.0 && \
     pip install --no-cache-dir uvicorn[standard]==0.27.0 && \
     pip install --no-cache-dir python-multipart==0.0.9 && \
@@ -45,5 +45,6 @@ COPY main.py .
 # Expose port
 EXPOSE 8000
 
-# Run the application (Fixed for Railway!)
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run the application (Python handles PORT env variable)
+CMD ["python", "main.py"]
+

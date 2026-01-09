@@ -36,19 +36,18 @@ app = FastAPI(
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # في production: غيّرها لـ domains محددة
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ============================================================
-# Firebase Setup (من Environment Variables للأمان!)
+# Firebase Setup
 # ============================================================
 try:
     logger.info("🔄 Initializing Firebase...")
     
-    # طريقة 1: من environment variable (للـ production)
     firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
     
     if firebase_creds_json:
@@ -56,7 +55,6 @@ try:
         cred_dict = json.loads(firebase_creds_json)
         cred = credentials.Certificate(cred_dict)
     else:
-        # طريقة 2: من ملف (للتطوير المحلي)
         logger.info("✅ Loading Firebase credentials from file")
         cred = credentials.Certificate('firebase-credentials.json')
     
@@ -74,7 +72,6 @@ except Exception as e:
     logger.error(f"❌ Firebase connection error: {e}")
     db = None
     bucket = None
-    raise RuntimeError("Failed to initialize Firebase - cannot start API")
 
 # ============================================================
 # InsightFace Model
@@ -83,24 +80,13 @@ logger.info("⏳ Loading InsightFace model...")
 try:
     face_app = FaceAnalysis(
         name='buffalo_l',
-        providers=['CPUExecutionProvider']  # CPU-only للـ cloud
+        providers=['CPUExecutionProvider']
     )
     face_app.prepare(ctx_id=0, det_size=(640, 640))
     logger.info("✅ InsightFace model loaded successfully!")
 except Exception as e:
     logger.error(f"❌ InsightFace loading failed: {e}")
     face_app = None
-    raise RuntimeError("Failed to load InsightFace model - cannot start API")
-
-# ============================================================
-# Configuration
-# ============================================================
-RECOGNITION_THRESHOLD = float(os.environ.get('RECOGNITION_THRESHOLD', '0.40'))
-MIN_ENROLLMENT_IMAGES = int(os.environ.get('MIN_ENROLLMENT_IMAGES', '3'))
-
-logger.info(f"⚙️ Configuration:")
-logger.info(f"   Recognition Threshold: {RECOGNITION_THRESHOLD}")
-logger.info(f"   Min Enrollment Images: {MIN_ENROLLMENT_IMAGES}")
 
 # ============================================================
 # Helper Functions
@@ -123,7 +109,6 @@ def extract_embedding(image: np.ndarray):
             return None, "No face detected in image"
         
         if len(faces) > 1:
-            # استخدم أكبر وجه
             faces = sorted(
                 faces,
                 key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]),
@@ -132,7 +117,6 @@ def extract_embedding(image: np.ndarray):
             logger.warning(f"Multiple faces detected ({len(faces)}), using largest")
         
         embedding = faces[0].embedding
-        # Normalize
         embedding = embedding / np.linalg.norm(embedding)
         return embedding, None
         
@@ -153,7 +137,6 @@ def find_match(query_emb, user_id):
         for person in persons:
             data = person.to_dict()
             
-            # Reconstruct embeddings from flattened data
             flat_embeddings = data.get('embeddings_flat', [])
             embedding_dim = data.get('embedding_dim', 512)
             num_embeddings = data.get('num_embeddings', 0)
@@ -161,7 +144,6 @@ def find_match(query_emb, user_id):
             if not flat_embeddings or num_embeddings == 0:
                 continue
             
-            # Reshape back to list of embeddings
             for i in range(num_embeddings):
                 start = i * embedding_dim
                 end = start + embedding_dim
@@ -204,13 +186,12 @@ def root():
         "firebase": "connected" if db else "not connected",
         "encryption": "AES-256-CBC (End-to-End)",
         "storage_bucket": "munir-21f4a.firebasestorage.app",
-        "storage_mode": "ENCRYPTED - Images stored encrypted",
-        "threshold": RECOGNITION_THRESHOLD
+        "storage_mode": "ENCRYPTED - Images stored encrypted"
     }
 
 @app.get("/health")
 def health():
-    """Health check endpoint (للـ Railway/Render)"""
+    """Health check endpoint"""
     is_healthy = face_app is not None and db is not None
     
     if not is_healthy:
@@ -230,34 +211,18 @@ async def enroll_person(
     files: List[UploadFile] = File(...),
     encrypted_thumbnail: Optional[UploadFile] = File(None)
 ):
-    """
-    Enroll a new person with multiple face images
-    
-    Args:
-        name: Person's name
-        user_id: Firebase user ID
-        files: List of face images (minimum 3)
-        encrypted_thumbnail: Encrypted thumbnail (stored encrypted in Firebase)
-    
-    Returns:
-        Enrollment result with person_id and statistics
-    """
+    """Enroll a new person with multiple face images"""
     try:
-        # Validation
         if not face_app or not db:
             raise HTTPException(503, "Service not ready")
         
-        if len(files) < MIN_ENROLLMENT_IMAGES:
-            raise HTTPException(
-                400,
-                f"Need at least {MIN_ENROLLMENT_IMAGES} images, got {len(files)}"
-            )
+        if len(files) < 3:
+            raise HTTPException(400, f"Need at least 3 images, got {len(files)}")
         
         logger.info("=" * 60)
         logger.info(f"📝 Enrolling: {name} (User: {user_id})")
         logger.info("=" * 60)
         
-        # Process all images
         embeddings = []
         success_count = 0
         failed_count = 0
@@ -282,21 +247,15 @@ async def enroll_person(
                 logger.warning(f"  ❌ Image {idx + 1}: Error - {e}")
                 continue
         
-        if len(embeddings) < MIN_ENROLLMENT_IMAGES:
-            raise HTTPException(
-                400,
-                f"Only {len(embeddings)} valid faces found, need at least {MIN_ENROLLMENT_IMAGES}"
-            )
+        if len(embeddings) < 3:
+            raise HTTPException(400, f"Only {len(embeddings)} valid faces found, need at least 3")
         
-        # Generate unique person ID
         person_id = f"{name.lower().replace(' ', '_')}_{uuid.uuid4().hex[:8]}"
         
-        # Flatten embeddings for Firestore
         flattened_embeddings = []
         for emb in embeddings:
             flattened_embeddings.extend(emb)
         
-        # Prepare person data
         person_data = {
             'name': name,
             'embeddings_flat': flattened_embeddings,
@@ -306,21 +265,15 @@ async def enroll_person(
             'created_at': firestore.SERVER_TIMESTAMP
         }
         
-        # 🔐 Upload ENCRYPTED thumbnail
         thumbnail_url = None
         if encrypted_thumbnail:
             try:
                 logger.info("🔐 Uploading ENCRYPTED thumbnail...")
-                
                 encrypted_bytes = await encrypted_thumbnail.read()
                 logger.info(f"📥 Received encrypted file: {len(encrypted_bytes)} bytes")
                 
-                # رفع الملف المشفر مباشرة
                 blob = bucket.blob(f"users/{user_id}/thumbnails/{person_id}.enc")
-                blob.upload_from_string(
-                    encrypted_bytes,
-                    content_type='application/octet-stream'
-                )
+                blob.upload_from_string(encrypted_bytes, content_type='application/octet-stream')
                 blob.make_public()
                 thumbnail_url = blob.public_url
                 person_data['thumbnail_url'] = thumbnail_url
@@ -331,7 +284,6 @@ async def enroll_person(
             except Exception as e:
                 logger.warning(f"⚠️ Thumbnail upload failed: {e}")
         
-        # Save to Firestore
         db.collection('users').document(user_id).collection('persons').document(person_id).set(person_data)
         
         logger.info("=" * 60)
@@ -365,21 +317,11 @@ async def recognize(
     user_id: str = Form(...),
     file: UploadFile = File(...)
 ):
-    """
-    Recognize a face in an image
-    
-    Args:
-        user_id: Firebase user ID
-        file: Image file containing a face
-    
-    Returns:
-        Recognition result with person details if match found
-    """
+    """Recognize a face in an image"""
     try:
         if not face_app or not db:
             raise HTTPException(503, "Service not ready")
         
-        # Read and process image
         img_bytes = await file.read()
         img = read_image(img_bytes)
         query_emb, error = extract_embedding(img)
@@ -387,10 +329,11 @@ async def recognize(
         if error:
             raise HTTPException(400, error)
         
-        # Find match
         match, score = find_match(query_emb, user_id)
         
-        if match and score >= RECOGNITION_THRESHOLD:
+        THRESHOLD = 0.40
+        
+        if match and score >= THRESHOLD:
             logger.info(f"✅ Recognized: {match['person_name']} (score: {score:.3f})")
             return {
                 "success": True,
@@ -419,15 +362,7 @@ async def recognize(
 
 @app.get("/list_persons/{user_id}")
 def list_persons(user_id: str):
-    """
-    Get list of all enrolled persons for a user
-    
-    Args:
-        user_id: Firebase user ID
-    
-    Returns:
-        List of persons with their details
-    """
+    """Get list of all enrolled persons for a user"""
     try:
         persons_ref = db.collection('users').document(user_id).collection('persons')
         persons = persons_ref.stream()
@@ -435,7 +370,6 @@ def list_persons(user_id: str):
         result = []
         for p in persons:
             data = p.to_dict()
-            
             result.append({
                 "person_id": p.id,
                 "name": data.get('name', 'Unknown'),
@@ -443,7 +377,6 @@ def list_persons(user_id: str):
                 "thumbnail_url": data.get('thumbnail_url', None)
             })
         
-        # Sort by name
         result.sort(key=lambda x: x['name'].lower())
         
         logger.info(f"📋 Listed {len(result)} persons for user {user_id}")
@@ -460,18 +393,8 @@ def list_persons(user_id: str):
 
 @app.delete("/delete_person/{user_id}/{person_id}")
 def delete_person(user_id: str, person_id: str):
-    """
-    Delete a person and their data
-    
-    Args:
-        user_id: Firebase user ID
-        person_id: Person document ID
-    
-    Returns:
-        Deletion confirmation
-    """
+    """Delete a person and their data"""
     try:
-        # Get person document
         ref = db.collection('users').document(user_id).collection('persons').document(person_id)
         doc = ref.get()
         
@@ -481,7 +404,6 @@ def delete_person(user_id: str, person_id: str):
         data = doc.to_dict()
         name = data.get('name', 'Unknown')
         
-        # Delete encrypted thumbnail from Storage if exists
         if 'thumbnail_url' in data and data['thumbnail_url']:
             try:
                 blob = bucket.blob(f"users/{user_id}/thumbnails/{person_id}.enc")
@@ -491,7 +413,6 @@ def delete_person(user_id: str, person_id: str):
             except Exception as e:
                 logger.warning(f"  ⚠️ Failed to delete thumbnail: {e}")
         
-        # Delete Firestore document
         ref.delete()
         
         logger.info(f"✅ Deleted person: {name} ({person_id})")
@@ -522,7 +443,6 @@ async def startup_event():
     logger.info(f"   Version: 3.0.0")
     logger.info(f"   InsightFace: {'✅ Loaded' if face_app else '❌ Not Loaded'}")
     logger.info(f"   Firebase: {'✅ Connected' if db else '❌ Not Connected'}")
-    logger.info(f"   Threshold: {RECOGNITION_THRESHOLD}")
     logger.info("=" * 60)
 
 # ============================================================
@@ -531,7 +451,13 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
+    
+    # Get PORT from environment (Railway provides this)
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"🚀 Starting server on port {port}...")
+    
+    logger.info("🚀 Starting Munir Face Recognition API...")
     logger.info("🔐 Images are stored ENCRYPTED - Only decrypted in app")
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    logger.info(f"🌐 Port: {port}")
+    logger.info("=" * 60)
+    
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")\
