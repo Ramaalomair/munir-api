@@ -78,11 +78,11 @@ except Exception as e:
 # ============================================================
 logger.info("⏳ Loading InsightFace model...")
 try:
-   face_app = FaceAnalysis(
-    name='buffalo_sc',  # بدل buffalo_l
-    providers=['CPUExecutionProvider']
-)
-face_app.prepare(ctx_id=0, det_size=(320, 320))  # بدل 640
+    face_app = FaceAnalysis(
+        name='buffalo_sc',
+        providers=['CPUExecutionProvider']
+    )
+    face_app.prepare(ctx_id=0, det_size=(320, 320))
     logger.info("✅ InsightFace model loaded successfully!")
 except Exception as e:
     logger.error(f"❌ InsightFace loading failed: {e}")
