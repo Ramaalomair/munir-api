@@ -450,9 +450,9 @@ async def startup_event():
 # ============================================================
 
 if __name__ == "__main__":
+    import os
     import uvicorn
     
-    # Get PORT from environment (Railway provides this)
     port = int(os.environ.get("PORT", 8000))
     
     logger.info("🚀 Starting Munir Face Recognition API...")
@@ -460,4 +460,8 @@ if __name__ == "__main__":
     logger.info(f"🌐 Port: {port}")
     logger.info("=" * 60)
     
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port
+    )
