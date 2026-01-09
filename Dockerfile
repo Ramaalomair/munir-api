@@ -1,5 +1,5 @@
-# Dockerfile for Munir Face Recognition API (Render Compatible)
-FROM python:3.10
+# Dockerfile for Munir Face Recognition API (Fixed for Render)
+FROM python:3.10-bullseye
 
 # Set working directory
 WORKDIR /app
@@ -14,15 +14,30 @@ RUN apt-get update && \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first
+# Upgrade pip
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies one by one
+RUN pip install --no-cache-dir fastapi==0.109.0 && \
+    pip install --no-cache-dir uvicorn[standard]==0.27.0 && \
+    pip install --no-cache-dir python-multipart==0.0.9 && \
+    pip install --no-cache-dir numpy==1.24.3 && \
+    pip install --no-cache-dir opencv-python-headless==4.9.0.80 && \
+    pip install --no-cache-dir Pillow==10.2.0 && \
+    pip install --no-cache-dir onnxruntime==1.16.3 && \
+    pip install --no-cache-dir insightface==0.7.3 && \
+    pip install --no-cache-dir firebase-admin==6.4.0 && \
+    pip install --no-cache-dir cryptography==42.0.2 && \
+    pip install --no-cache-dir python-dotenv==1.0.0
 
 # Copy application code
 COPY main.py .
@@ -30,9 +45,5 @@ COPY main.py .
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5)" || exit 1
-
 # Run the application
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}	
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info
