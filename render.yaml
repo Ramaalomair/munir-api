@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: munir-api
+    env: docker
+    plan: free  # أو starter
+    region: singapore  # أقرب region للسعودية
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: ENVIRONMENT
+        value: production
+      - key: RECOGNITION_THRESHOLD
+        value: 0.40
+      - key: MIN_ENROLLMENT_IMAGES
+        value: 3
+      - key: FIREBASE_CREDENTIALS
+        sync: false  # تعيين يدوياً من Dashboard
