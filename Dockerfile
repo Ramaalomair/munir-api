@@ -1,4 +1,4 @@
-# Dockerfile for Munir Face Recognition API (Fixed for Render)
+# Dockerfile for Munir Face Recognition API (Railway Fixed)
 FROM python:3.10-bullseye
 
 # Set working directory
@@ -45,5 +45,5 @@ COPY main.py .
 # Expose port
 EXPOSE 8000
 
-# Run the application
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info
+# Run the application (Fixed for Railway!)
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
