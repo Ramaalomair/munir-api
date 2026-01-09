@@ -45,33 +45,48 @@ app.add_middleware(
 # ============================================================
 # Firebase Setup
 # ============================================================
-try:
-    logger.info("🔄 Initializing Firebase...")
-    
-    firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
-    
-    if firebase_creds_json:
-        logger.info("✅ Loading Firebase credentials from environment variable")
-        cred_dict = json.loads(firebase_creds_json)
-        cred = credentials.Certificate(cred_dict)
-    else:
-        logger.info("✅ Loading Firebase credentials from file")
-        cred = credentials.Certificate('firebase-credentials.json')
-    
-    firebase_admin.initialize_app(cred, {
-        'storageBucket': 'munir-21f4a.firebasestorage.app'
-    })
-    
-    db = firestore.client()
-    bucket = storage.bucket()
-    
-    logger.info("✅ Firebase connected successfully")
-    logger.info(f"📦 Storage Bucket: munir-21f4a.firebasestorage.app")
-    
-except Exception as e:
-    logger.error(f"❌ Firebase connection error: {e}")
-    db = None
-    bucket = None
+def initialize_firebase():
+    global db, bucket
+    try:
+        # Check if already initialized
+        try:
+            firebase_admin.get_app()
+            logger.info("🔄 Firebase already initialized")
+            return
+        except ValueError:
+            pass
+        
+        logger.info("🔄 Initializing Firebase...")
+        
+        firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
+        
+        if firebase_creds_json:
+            logger.info("✅ Loading Firebase credentials from environment variable")
+            cred_dict = json.loads(firebase_creds_json)
+            cred = credentials.Certificate(cred_dict)
+        else:
+            logger.info("✅ Loading Firebase credentials from file")
+            cred = credentials.Certificate('firebase-credentials.json')
+        
+        firebase_admin.initialize_app(cred, {
+            'storageBucket': 'munir-21f4a.firebasestorage.app'
+        })
+        
+        db = firestore.client()
+        bucket = storage.bucket()
+        
+        logger.info("✅ Firebase connected successfully")
+        logger.info(f"📦 Storage Bucket: munir-21f4a.firebasestorage.app")
+        
+    except Exception as e:
+        logger.error(f"❌ Firebase connection error: {e}")
+        db = None
+        bucket = None
+
+# Initialize Firebase
+db = None
+bucket = None
+initialize_firebase()
 
 # ============================================================
 # InsightFace Model
@@ -444,24 +459,3 @@ async def startup_event():
     logger.info(f"   InsightFace: {'✅ Loaded' if face_app else '❌ Not Loaded'}")
     logger.info(f"   Firebase: {'✅ Connected' if db else '❌ Not Connected'}")
     logger.info("=" * 60)
-
-# ============================================================
-# Run Server
-# ============================================================
-
-if __name__ == "__main__":
-    import os
-    import uvicorn
-    
-    port = int(os.environ.get("PORT", 8000))
-    
-    logger.info("🚀 Starting Munir Face Recognition API...")
-    logger.info("🔐 Images are stored ENCRYPTED - Only decrypted in app")
-    logger.info(f"🌐 Port: {port}")
-    logger.info("=" * 60)
-    
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=port
-    )
