@@ -1,7 +1,5 @@
 FROM python:3.10-bullseye
-
 WORKDIR /app
-
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -20,20 +18,22 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir fastapi==0.109.0 && \
-    pip install --no-cache-dir uvicorn[standard]==0.27.0 && \
-    pip install --no-cache-dir python-multipart==0.0.9 && \
-    pip install --no-cache-dir numpy==1.24.3 && \
-    pip install --no-cache-dir opencv-python-headless==4.9.0.80 && \
-    pip install --no-cache-dir Pillow==10.2.0 && \
-    pip install --no-cache-dir onnxruntime==1.16.3 && \
-    pip install --no-cache-dir insightface==0.7.3 && \
-    pip install --no-cache-dir firebase-admin==6.4.0 && \
-    pip install --no-cache-dir cryptography==42.0.2 && \
-    pip install --no-cache-dir python-dotenv==1.0.0
+# Install packages with NumPy < 2.0 to avoid compatibility issues
+RUN pip install --no-cache-dir \
+    "numpy<2.0" \
+    fastapi==0.109.0 \
+    uvicorn[standard]==0.27.0 \
+    python-multipart==0.0.9 \
+    opencv-python-headless==4.9.0.80 \
+    Pillow==10.2.0 \
+    onnxruntime==1.16.3 \
+    insightface==0.7.3 \
+    firebase-admin==6.4.0 \
+    cryptography==42.0.2 \
+    python-dotenv==1.0.0
 
 COPY main.py .
 
 EXPOSE 8000
 
-CMD sh -c "python main.py"
+CMD ["sh", "-c", "python main.py"]
