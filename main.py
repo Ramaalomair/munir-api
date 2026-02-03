@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 app = FastAPI(
     title="Munir Face Recognition API",
-    version="3.0.0",
+    version="3.0.1",
     description="Production-ready Face Recognition API using InsightFace + Firebase"
 )
 
@@ -60,12 +60,23 @@ def initialize_firebase():
         
         firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
         
+        # 🔥 التشخيص المفصّل
         if firebase_creds_json:
+            logger.info(f"✅ FIREBASE_CREDENTIALS found: {len(firebase_creds_json)} characters")
+            logger.info(f"✅ First 50 chars: {firebase_creds_json[:50]}...")
             logger.info("✅ Loading Firebase credentials from environment variable")
-            cred_dict = json.loads(firebase_creds_json)
-            cred = credentials.Certificate(cred_dict)
+            try:
+                cred_dict = json.loads(firebase_creds_json)
+                logger.info(f"✅ JSON parsed successfully")
+                logger.info(f"✅ Project ID: {cred_dict.get('project_id', 'NOT FOUND')}")
+                cred = credentials.Certificate(cred_dict)
+            except json.JSONDecodeError as je:
+                logger.error(f"❌ JSON parsing error: {je}")
+                raise
         else:
-            logger.info("✅ Loading Firebase credentials from file")
+            logger.error("❌ FIREBASE_CREDENTIALS environment variable NOT FOUND!")
+            logger.info("📝 Available env vars: " + ", ".join([k for k in os.environ.keys() if 'FIRE' in k.upper()]))
+            logger.info("✅ Attempting to load from file...")
             cred = credentials.Certificate('firebase-credentials.json')
         
         firebase_admin.initialize_app(cred, {
@@ -80,6 +91,9 @@ def initialize_firebase():
         
     except Exception as e:
         logger.error(f"❌ Firebase connection error: {e}")
+        logger.error(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        logger.error(traceback.format_exc())
         db = None
         bucket = None
 
@@ -194,7 +208,7 @@ def root():
     """Root endpoint - API information"""
     return {
         "api": "Munir Face Recognition API",
-        "version": "3.0.0",
+        "version": "3.0.1",
         "status": "running",
         "environment": os.environ.get('ENVIRONMENT', 'production'),
         "insightface": "loaded" if face_app else "not loaded",
@@ -455,7 +469,7 @@ async def startup_event():
     logger.info("=" * 60)
     logger.info("🚀 Munir Face Recognition API Started!")
     logger.info(f"   Environment: {os.environ.get('ENVIRONMENT', 'production')}")
-    logger.info(f"   Version: 3.0.0")
+    logger.info(f"   Version: 3.0.1")
     logger.info(f"   InsightFace: {'✅ Loaded' if face_app else '❌ Not Loaded'}")
     logger.info(f"   Firebase: {'✅ Connected' if db else '❌ Not Connected'}")
     logger.info("=" * 60)
