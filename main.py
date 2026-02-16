@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 app = FastAPI(
     title="Munir Face Recognition API",
-    version="3.0.1",
+    version="3.1.0",
     description="Production-ready Face Recognition API using InsightFace + Firebase"
 )
 
@@ -208,7 +208,7 @@ def root():
     """Root endpoint - API information"""
     return {
         "api": "Munir Face Recognition API",
-        "version": "3.0.1",
+        "version": "3.1.0",
         "status": "running",
         "environment": os.environ.get('ENVIRONMENT', 'production'),
         "insightface": "loaded" if face_app else "not loaded",
@@ -238,9 +238,10 @@ async def enroll_person(
     name: str = Form(...),
     user_id: str = Form(...),
     files: List[UploadFile] = File(...),
-    encrypted_thumbnail: Optional[UploadFile] = File(None)
+    encrypted_thumbnail: Optional[UploadFile] = File(None),
+    person_id: Optional[str] = Form(None)  # ✅ NEW: Optional person_id for updates
 ):
-    """Enroll a new person with multiple face images"""
+    """Enroll a new person with multiple face images (or update existing person)"""
     try:
         if not face_app or not db:
             raise HTTPException(503, "Service not ready")
@@ -248,8 +249,17 @@ async def enroll_person(
         if len(files) < 3:
             raise HTTPException(400, f"Need at least 3 images, got {len(files)}")
         
+        # ✅ If person_id provided, this is an update. Otherwise, create new.
+        is_update = person_id is not None
+        
+        if not person_id:
+            person_id = f"{name.lower().replace(' ', '_')}_{uuid.uuid4().hex[:8]}"
+        
         logger.info("=" * 60)
-        logger.info(f"📝 Enrolling: {name} (User: {user_id})")
+        if is_update:
+            logger.info(f"🔄 Updating: {name} (Person ID: {person_id}, User: {user_id})")
+        else:
+            logger.info(f"📝 Enrolling: {name} (User: {user_id})")
         logger.info("=" * 60)
         
         embeddings = []
@@ -279,8 +289,6 @@ async def enroll_person(
         if len(embeddings) < 3:
             raise HTTPException(400, f"Only {len(embeddings)} valid faces found, need at least 3")
         
-        person_id = f"{name.lower().replace(' ', '_')}_{uuid.uuid4().hex[:8]}"
-        
         flattened_embeddings = []
         for emb in embeddings:
             flattened_embeddings.extend(emb)
@@ -291,8 +299,12 @@ async def enroll_person(
             'embedding_dim': 512,
             'num_embeddings': len(embeddings),
             'num_angles': len(embeddings),
-            'created_at': firestore.SERVER_TIMESTAMP
+            'created_at': firestore.SERVER_TIMESTAMP if not is_update else None,
+            'updated_at': firestore.SERVER_TIMESTAMP
         }
+        
+        # ✅ Remove None values
+        person_data = {k: v for k, v in person_data.items() if v is not None}
         
         thumbnail_url = None
         if encrypted_thumbnail:
@@ -313,10 +325,17 @@ async def enroll_person(
             except Exception as e:
                 logger.warning(f"⚠️ Thumbnail upload failed: {e}")
         
-        db.collection('users').document(user_id).collection('persons').document(person_id).set(person_data)
+        # ✅ Use set() with merge=True for both new and update
+        db.collection('users').document(user_id).collection('persons').document(person_id).set(
+            person_data,
+            merge=True
+        )
         
         logger.info("=" * 60)
-        logger.info(f"✅ Successfully enrolled {name}!")
+        if is_update:
+            logger.info(f"✅ Successfully updated {name}!")
+        else:
+            logger.info(f"✅ Successfully enrolled {name}!")
         logger.info(f"   Person ID: {person_id}")
         logger.info(f"   Embeddings: {success_count}/{len(files)} images")
         logger.info(f"   Thumbnail: {'✅ Yes (ENCRYPTED)' if thumbnail_url else '❌ No'}")
@@ -324,7 +343,7 @@ async def enroll_person(
         
         return {
             "success": True,
-            "message": f"Successfully enrolled {name}",
+            "message": f"Successfully {'updated' if is_update else 'enrolled'} {name}",
             "person_id": person_id,
             "person_name": name,
             "total_embeddings": len(embeddings),
@@ -469,7 +488,7 @@ async def startup_event():
     logger.info("=" * 60)
     logger.info("🚀 Munir Face Recognition API Started!")
     logger.info(f"   Environment: {os.environ.get('ENVIRONMENT', 'production')}")
-    logger.info(f"   Version: 3.0.1")
+    logger.info(f"   Version: 3.1.0")
     logger.info(f"   InsightFace: {'✅ Loaded' if face_app else '❌ Not Loaded'}")
     logger.info(f"   Firebase: {'✅ Connected' if db else '❌ Not Connected'}")
     logger.info("=" * 60)
