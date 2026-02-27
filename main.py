@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 app = FastAPI(
     title="Munir Face Recognition API",
-    version="3.1.0",
+    version="3.2.0",
     description="Production-ready Face Recognition API using InsightFace + Firebase"
 )
 
@@ -48,7 +48,6 @@ app.add_middleware(
 def initialize_firebase():
     global db, bucket
     try:
-        # Check if already initialized
         try:
             firebase_admin.get_app()
             logger.info("🔄 Firebase already initialized")
@@ -60,7 +59,6 @@ def initialize_firebase():
         
         firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
         
-        # 🔥 التشخيص المفصّل
         if firebase_creds_json:
             logger.info(f"✅ FIREBASE_CREDENTIALS found: {len(firebase_creds_json)} characters")
             logger.info(f"✅ First 50 chars: {firebase_creds_json[:50]}...")
@@ -130,7 +128,7 @@ def read_image(image_bytes: bytes) -> np.ndarray:
         raise ValueError(f"Failed to read image: {str(e)}")
 
 def extract_embedding(image: np.ndarray):
-    """Extract face embedding from image"""
+    """Extract face embedding from image - single face only"""
     try:
         faces = face_app.get(image)
         
@@ -152,12 +150,37 @@ def extract_embedding(image: np.ndarray):
     except Exception as e:
         return None, f"Embedding extraction failed: {str(e)}"
 
+def extract_all_embeddings(image: np.ndarray):
+    """
+    Extract embeddings for ALL faces in an image.
+    Returns list of (embedding, bbox) tuples.
+    """
+    try:
+        faces = face_app.get(image)
+        
+        if len(faces) == 0:
+            return []
+        
+        results = []
+        for face in faces:
+            emb = face.embedding
+            emb = emb / np.linalg.norm(emb)
+            bbox = [float(v) for v in face.bbox]  # [x1, y1, x2, y2]
+            results.append((emb, bbox))
+        
+        logger.info(f"👥 Detected {len(results)} face(s) in image")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Embedding extraction failed: {e}")
+        return []
+
 def cosine_similarity(emb1, emb2):
     """Calculate cosine similarity between two embeddings"""
     return float(np.dot(emb1, emb2))
 
 def find_match(query_emb, user_id):
-    """Find matching person in database"""
+    """Find matching person in database for a single embedding"""
     try:
         persons = db.collection('users').document(user_id).collection('persons').stream()
         best_match = None
@@ -199,6 +222,69 @@ def find_match(query_emb, user_id):
         logger.error(f"Error in find_match: {e}")
         return None, -1
 
+def get_all_persons_embeddings(user_id):
+    """
+    Load all persons and their embeddings from Firebase once.
+    Used for multi-face recognition to avoid repeated DB calls.
+    Returns list of dicts with person info + embeddings.
+    """
+    try:
+        persons = db.collection('users').document(user_id).collection('persons').stream()
+        all_persons = []
+        
+        for person in persons:
+            data = person.to_dict()
+            flat_embeddings = data.get('embeddings_flat', [])
+            embedding_dim = data.get('embedding_dim', 512)
+            num_embeddings = data.get('num_embeddings', 0)
+            
+            if not flat_embeddings or num_embeddings == 0:
+                continue
+            
+            # Parse embeddings
+            embeddings = []
+            for i in range(num_embeddings):
+                start = i * embedding_dim
+                end = start + embedding_dim
+                stored_emb = flat_embeddings[start:end]
+                if len(stored_emb) == embedding_dim:
+                    stored_emb = np.array(stored_emb)
+                    stored_emb = stored_emb / np.linalg.norm(stored_emb)
+                    embeddings.append(stored_emb)
+            
+            if embeddings:
+                all_persons.append({
+                    "person_id": person.id,
+                    "person_name": data.get('name'),
+                    "embeddings": embeddings
+                })
+        
+        return all_persons
+        
+    except Exception as e:
+        logger.error(f"Error loading persons embeddings: {e}")
+        return []
+
+def find_match_from_persons(query_emb, all_persons):
+    """
+    Find best match for a single embedding from pre-loaded persons list.
+    Much faster than querying DB each time.
+    """
+    best_match = None
+    best_score = -1
+    
+    for person in all_persons:
+        for stored_emb in person['embeddings']:
+            score = cosine_similarity(query_emb, stored_emb)
+            if score > best_score:
+                best_score = score
+                best_match = {
+                    "person_id": person['person_id'],
+                    "person_name": person['person_name'],
+                }
+    
+    return best_match, best_score
+
 # ============================================================
 # API Endpoints
 # ============================================================
@@ -208,7 +294,7 @@ def root():
     """Root endpoint - API information"""
     return {
         "api": "Munir Face Recognition API",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "status": "running",
         "environment": os.environ.get('ENVIRONMENT', 'production'),
         "insightface": "loaded" if face_app else "not loaded",
@@ -239,7 +325,7 @@ async def enroll_person(
     user_id: str = Form(...),
     files: List[UploadFile] = File(...),
     encrypted_thumbnail: Optional[UploadFile] = File(None),
-    person_id: Optional[str] = Form(None)  # ✅ NEW: Optional person_id for updates
+    person_id: Optional[str] = Form(None)
 ):
     """Enroll a new person with multiple face images (or update existing person)"""
     try:
@@ -249,7 +335,6 @@ async def enroll_person(
         if len(files) < 3:
             raise HTTPException(400, f"Need at least 3 images, got {len(files)}")
         
-        # ✅ If person_id provided, this is an update. Otherwise, create new.
         is_update = person_id is not None
         
         if not person_id:
@@ -299,12 +384,11 @@ async def enroll_person(
             'embedding_dim': 512,
             'num_embeddings': len(embeddings),
             'num_angles': len(embeddings),
-            'created_at': firestore.SERVER_TIMESTAMP if not is_update else None,
             'updated_at': firestore.SERVER_TIMESTAMP
         }
         
-        # ✅ Remove None values
-        person_data = {k: v for k, v in person_data.items() if v is not None}
+        if not is_update:
+            person_data['created_at'] = firestore.SERVER_TIMESTAMP
         
         thumbnail_url = None
         if encrypted_thumbnail:
@@ -320,12 +404,10 @@ async def enroll_person(
                 person_data['thumbnail_url'] = thumbnail_url
                 
                 logger.info(f"✅ Encrypted thumbnail uploaded!")
-                logger.info(f"🔒 File remains ENCRYPTED in storage")
                 
             except Exception as e:
                 logger.warning(f"⚠️ Thumbnail upload failed: {e}")
         
-        # ✅ Use set() with merge=True for both new and update
         db.collection('users').document(user_id).collection('persons').document(person_id).set(
             person_data,
             merge=True
@@ -365,7 +447,7 @@ async def recognize(
     user_id: str = Form(...),
     file: UploadFile = File(...)
 ):
-    """Recognize a face in an image"""
+    """Recognize a single face in an image"""
     try:
         if not face_app or not db:
             raise HTTPException(503, "Service not ready")
@@ -407,6 +489,120 @@ async def recognize(
     except Exception as e:
         logger.error(f"❌ Recognition error: {e}")
         raise HTTPException(500, f"Recognition failed: {str(e)}")
+
+# ============================================================
+# NEW: Recognize Multiple Faces
+# ============================================================
+
+@app.post("/recognize_multiple")
+async def recognize_multiple(
+    user_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """
+    Recognize ALL faces in a single image.
+    Returns a list with a result for each detected face.
+    """
+    try:
+        if not face_app or not db:
+            raise HTTPException(503, "Service not ready")
+        
+        logger.info("=" * 60)
+        logger.info(f"👥 Multi-face recognition request (User: {user_id})")
+        
+        # Read image
+        img_bytes = await file.read()
+        img = read_image(img_bytes)
+        
+        # Extract embeddings for ALL faces
+        faces_data = extract_all_embeddings(img)
+        
+        if not faces_data:
+            logger.info("⚠️ No faces detected in image")
+            return {
+                "success": True,
+                "total_faces": 0,
+                "recognized_count": 0,
+                "faces": [],
+                "message": "No faces detected in image"
+            }
+        
+        logger.info(f"👥 Found {len(faces_data)} face(s), starting recognition...")
+        
+        # Load all persons from DB once (efficient - single DB read)
+        all_persons = get_all_persons_embeddings(user_id)
+        logger.info(f"📂 Loaded {len(all_persons)} enrolled person(s) from DB")
+        
+        THRESHOLD = 0.40
+        results = []
+        recognized_count = 0
+        
+        for idx, (emb, bbox) in enumerate(faces_data):
+            logger.info(f"  🔍 Processing face {idx + 1}/{len(faces_data)}...")
+            
+            if not all_persons:
+                # No enrolled persons at all
+                results.append({
+                    "face_index": idx,
+                    "success": True,
+                    "recognized": False,
+                    "person_name": None,
+                    "person_id": None,
+                    "confidence": 0.0,
+                    "similarity_score": 0.0,
+                    "bbox": bbox,
+                    "message": "No enrolled persons found"
+                })
+                continue
+            
+            match, score = find_match_from_persons(emb, all_persons)
+            
+            if match and score >= THRESHOLD:
+                recognized_count += 1
+                logger.info(f"  ✅ Face {idx + 1}: Recognized as {match['person_name']} (score: {score:.3f})")
+                results.append({
+                    "face_index": idx,
+                    "success": True,
+                    "recognized": True,
+                    "person_name": match["person_name"],
+                    "person_id": match["person_id"],
+                    "confidence": round(score, 4),
+                    "similarity_score": round(score * 100, 2),
+                    "bbox": bbox,
+                    "message": f"Recognized: {match['person_name']}"
+                })
+            else:
+                logger.info(f"  ❌ Face {idx + 1}: Unknown (best score: {score:.3f})")
+                results.append({
+                    "face_index": idx,
+                    "success": True,
+                    "recognized": False,
+                    "person_name": None,
+                    "person_id": None,
+                    "confidence": round(score, 4) if match else 0.0,
+                    "similarity_score": round(score * 100, 2) if match else 0.0,
+                    "bbox": bbox,
+                    "message": "Unknown person"
+                })
+        
+        logger.info(f"✅ Done: {recognized_count}/{len(faces_data)} face(s) recognized")
+        logger.info("=" * 60)
+        
+        return {
+            "success": True,
+            "total_faces": len(faces_data),
+            "recognized_count": recognized_count,
+            "faces": results,
+            "message": f"Detected {len(faces_data)} face(s), recognized {recognized_count}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Multi-face recognition error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(500, f"Multi-face recognition failed: {str(e)}")
 
 @app.get("/list_persons/{user_id}")
 def list_persons(user_id: str):
@@ -488,7 +684,7 @@ async def startup_event():
     logger.info("=" * 60)
     logger.info("🚀 Munir Face Recognition API Started!")
     logger.info(f"   Environment: {os.environ.get('ENVIRONMENT', 'production')}")
-    logger.info(f"   Version: 3.1.0")
+    logger.info(f"   Version: 3.2.0")
     logger.info(f"   InsightFace: {'✅ Loaded' if face_app else '❌ Not Loaded'}")
     logger.info(f"   Firebase: {'✅ Connected' if db else '❌ Not Connected'}")
     logger.info("=" * 60)
