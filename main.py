@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 app = FastAPI(
     title="Munir Face Recognition API",
-    version="3.3.0",
+    version="3.4.0",
     description="Production-ready Face Recognition API using InsightFace + Firebase"
 )
 
@@ -294,7 +294,7 @@ def root():
     """Root endpoint - API information"""
     return {
         "api": "Munir Face Recognition API",
-        "version": "3.3.0",
+        "version": "3.4.0",
         "status": "running",
         "environment": os.environ.get('ENVIRONMENT', 'production'),
         "insightface": "loaded" if face_app else "not loaded",
@@ -318,6 +318,100 @@ def health():
         "firebase": True,
         "timestamp": datetime.now().isoformat()
     }
+
+# ============================================================
+# NEW: Verify Same Person
+# ============================================================
+
+@app.post("/verify_same_person")
+async def verify_same_person(
+    files: List[UploadFile] = File(...)
+):
+    """
+    Check if all uploaded images belong to the same person.
+    Used during enrollment to validate photos before saving.
+    Requires at least 2 images.
+    """
+    try:
+        if not face_app:
+            raise HTTPException(503, "Service not ready")
+
+        if len(files) < 2:
+            raise HTTPException(400, "Need at least 2 images to compare")
+
+        logger.info("=" * 60)
+        logger.info(f"🔍 Verify same person — {len(files)} images received")
+
+        embeddings = []
+
+        for idx, file in enumerate(files):
+            try:
+                img_bytes = await file.read()
+                img = read_image(img_bytes)
+                emb, error = extract_embedding(img)
+
+                if emb is None:
+                    logger.warning(f"  ⚠️ Image {idx + 1}: {error}")
+                    return {
+                        "success": False,
+                        "same_person": False,
+                        "message": f"No face detected in image {idx + 1}",
+                        "image_index": idx
+                    }
+
+                embeddings.append(emb)
+                logger.info(f"  ✅ Image {idx + 1}: Embedding extracted")
+
+            except Exception as e:
+                logger.error(f"  ❌ Image {idx + 1}: {e}")
+                return {
+                    "success": False,
+                    "same_person": False,
+                    "message": f"Error processing image {idx + 1}: {str(e)}",
+                    "image_index": idx
+                }
+
+        # حساب cosine similarity بين كل الأزواج
+        scores = []
+        for i in range(len(embeddings)):
+            for j in range(i + 1, len(embeddings)):
+                score = cosine_similarity(embeddings[i], embeddings[j])
+                scores.append(score)
+                logger.info(f"  📊 Image {i + 1} vs Image {j + 1}: {score:.4f}")
+
+        avg_score = sum(scores) / len(scores)
+        min_score = min(scores)
+
+        # threshold واقعي لـ InsightFace مع زوايا مختلفة (أمام/يمين/يسار)
+        # buffalo_sc أقل دقة من buffalo_l لذا نخفف الـ threshold شوي
+        THRESHOLD = 0.30
+
+        same_person = min_score >= THRESHOLD
+
+        logger.info(f"  📊 Avg Score: {avg_score:.4f} | Min Score: {min_score:.4f}")
+        logger.info(f"  {'✅ Same person' if same_person else '❌ Different persons'}")
+        logger.info("=" * 60)
+
+        return {
+            "success": True,
+            "same_person": same_person,
+            "average_score": round(avg_score, 4),
+            "min_score": round(min_score, 4),
+            "num_images": len(files),
+            "message": "Same person confirmed" if same_person else "Photos appear to be different persons"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Verify same person error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(500, f"Verification failed: {str(e)}")
+
+# ============================================================
+# Enroll Person
+# ============================================================
 
 @app.post("/enroll_person")
 async def enroll_person(
@@ -442,6 +536,10 @@ async def enroll_person(
         logger.error(traceback.format_exc())
         raise HTTPException(500, f"Enrollment failed: {str(e)}")
 
+# ============================================================
+# Recognize Single Face
+# ============================================================
+
 @app.post("/recognize")
 async def recognize(
     user_id: str = Form(...),
@@ -491,7 +589,7 @@ async def recognize(
         raise HTTPException(500, f"Recognition failed: {str(e)}")
 
 # ============================================================
-# NEW: Recognize Multiple Faces
+# Recognize Multiple Faces
 # ============================================================
 
 @app.post("/recognize_multiple")
@@ -510,11 +608,9 @@ async def recognize_multiple(
         logger.info("=" * 60)
         logger.info(f"👥 Multi-face recognition request (User: {user_id})")
         
-        # Read image
         img_bytes = await file.read()
         img = read_image(img_bytes)
         
-        # Extract embeddings for ALL faces
         faces_data = extract_all_embeddings(img)
         
         if not faces_data:
@@ -529,7 +625,6 @@ async def recognize_multiple(
         
         logger.info(f"👥 Found {len(faces_data)} face(s), starting recognition...")
         
-        # Load all persons from DB once (efficient - single DB read)
         all_persons = get_all_persons_embeddings(user_id)
         logger.info(f"📂 Loaded {len(all_persons)} enrolled person(s) from DB")
         
@@ -602,6 +697,10 @@ async def recognize_multiple(
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(500, f"Multi-face recognition failed: {str(e)}")
+
+# ============================================================
+# List / Update / Delete Persons
+# ============================================================
 
 @app.get("/list_persons/{user_id}")
 def list_persons(user_id: str):
@@ -720,7 +819,7 @@ async def startup_event():
     logger.info("=" * 60)
     logger.info("🚀 Munir Face Recognition API Started!")
     logger.info(f"   Environment: {os.environ.get('ENVIRONMENT', 'production')}")
-    logger.info(f"   Version: 3.3.0")
+    logger.info(f"   Version: 3.4.0")
     logger.info(f"   InsightFace: {'✅ Loaded' if face_app else '❌ Not Loaded'}")
     logger.info(f"   Firebase: {'✅ Connected' if db else '❌ Not Connected'}")
     logger.info("=" * 60)
