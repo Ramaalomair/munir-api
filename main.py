@@ -14,7 +14,7 @@ from datetime import datetime
 import uuid
 import os
 import json
-
+import time
 # ============================================================
 # Logging Setup
 # ============================================================
@@ -549,7 +549,7 @@ async def recognize(
     try:
         if not face_app or not db:
             raise HTTPException(503, "Service not ready")
-        
+        start_time = time.time()
         img_bytes = await file.read()
         img = read_image(img_bytes)
         query_emb, error = extract_embedding(img)
@@ -563,6 +563,7 @@ async def recognize(
         
         if match and score >= THRESHOLD:
             logger.info(f"✅ Recognized: {match['person_name']} (score: {score:.3f})")
+            inference_time = time.time() - start_time
             return {
                 "success": True,
                 "recognized": True,
@@ -605,6 +606,9 @@ async def recognize_multiple(
         if not face_app or not db:
             raise HTTPException(503, "Service not ready")
         
+        # 1. تسجيل وقت البداية
+        start_time = time.time()
+        
         logger.info("=" * 60)
         logger.info(f"👥 Multi-face recognition request (User: {user_id})")
         
@@ -613,12 +617,14 @@ async def recognize_multiple(
         
         faces_data = extract_all_embeddings(img)
         
+        # إذا لم يتم اكتشاف وجوه
         if not faces_data:
             logger.info("⚠️ No faces detected in image")
             return {
                 "success": True,
                 "total_faces": 0,
                 "recognized_count": 0,
+                "inference_time": round(time.time() - start_time, 4), # التعديل هنا
                 "faces": [],
                 "message": "No faces detected in image"
             }
@@ -633,7 +639,7 @@ async def recognize_multiple(
         recognized_count = 0
         
         for idx, (emb, bbox) in enumerate(faces_data):
-            logger.info(f"  🔍 Processing face {idx + 1}/{len(faces_data)}...")
+            logger.info(f"   🔍 Processing face {idx + 1}/{len(faces_data)}...")
             
             if not all_persons:
                 results.append({
@@ -653,7 +659,7 @@ async def recognize_multiple(
             
             if match and score >= THRESHOLD:
                 recognized_count += 1
-                logger.info(f"  ✅ Face {idx + 1}: Recognized as {match['person_name']} (score: {score:.3f})")
+                logger.info(f"   ✅ Face {idx + 1}: Recognized as {match['person_name']} (score: {score:.3f})")
                 results.append({
                     "face_index": idx,
                     "success": True,
@@ -666,7 +672,7 @@ async def recognize_multiple(
                     "message": f"Recognized: {match['person_name']}"
                 })
             else:
-                logger.info(f"  ❌ Face {idx + 1}: Unknown (best score: {score:.3f})")
+                logger.info(f"   ❌ Face {idx + 1}: Unknown (best score: {score:.3f})")
                 results.append({
                     "face_index": idx,
                     "success": True,
@@ -679,13 +685,18 @@ async def recognize_multiple(
                     "message": "Unknown person"
                 })
         
+        # 2. حساب الوقت النهائي بعد انتهاء الحلقة
+        total_inference_time = time.time() - start_time
+        
         logger.info(f"✅ Done: {recognized_count}/{len(faces_data)} face(s) recognized")
+        logger.info(f"⏱️ Total Inference Time: {total_inference_time:.4f}s")
         logger.info("=" * 60)
         
         return {
             "success": True,
             "total_faces": len(faces_data),
             "recognized_count": recognized_count,
+            "inference_time": round(total_inference_time, 4), # إرجاع الوقت هنا
             "faces": results,
             "message": f"Detected {len(faces_data)} face(s), recognized {recognized_count}"
         }
